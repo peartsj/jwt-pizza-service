@@ -5,7 +5,7 @@ import { defineConfig } from "eslint/config";
 
 export default [
   {
-    ignores: ["node_modules/**"],
+    ignores: ["node_modules/**", "dist/**", "coverage/**"],
   },
   {
     files: ["**/*.{js,ts}"],
@@ -13,9 +13,6 @@ export default [
       ecmaVersion: "latest",
       sourceType: "module",
     },
-    extends: ["eslint:recommended"],
-    rules: {
-      // add project-specific rules here if needed
-    },
+    rules: {},
   },
 ];
