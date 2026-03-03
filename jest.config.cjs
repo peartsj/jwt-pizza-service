@@ -5,4 +5,5 @@ module.exports = {
   restoreMocks: true,
   resetMocks: true,
   collectCoverageFrom: ['src/**/*.js'],
+  coverageReporters: ['json', 'json-summary', 'lcov', 'text'],
 };
