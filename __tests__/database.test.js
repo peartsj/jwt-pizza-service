@@ -1,5 +1,6 @@
 let mockNextExecuteBehavior;
 let mockNextQueryBehavior;
+let mockLastConnection;
 
 jest.mock('mysql2/promise', () => {
   return {
@@ -16,6 +17,7 @@ jest.mock('mysql2/promise', () => {
         rollback: jest.fn(async () => {}),
         end: jest.fn(() => {}),
       };
+      mockLastConnection = connection;
       return connection;
     }),
   };
@@ -207,5 +209,215 @@ describe('database DB module', () => {
     const [franchises, more] = await DB.getFranchises(authUser, 0, 10, '*');
     expect(more).toBe(false);
     expect(franchises[0].stores).toEqual([{ id: 1, name: 'SLC' }]);
+  });
+
+  test('getUsers supports paging, wildcard name filter, and roles', async () => {
+    mockNextExecuteBehavior = jest.fn(async (sql, params) => {
+      if (String(sql).startsWith('SELECT id, name, email FROM user WHERE name LIKE')) {
+        expect(params).toEqual(['ali%']);
+        return [
+          { id: 3, name: 'alice', email: 'alice@jwt.com' },
+          { id: 4, name: 'alicia', email: 'alicia@jwt.com' },
+        ];
+      }
+      if (String(sql).startsWith('SELECT role, objectId FROM userRole WHERE userId=')) {
+        return [{ role: 'diner', objectId: 0 }];
+      }
+      return defaultExecuteBehavior(sql, params);
+    });
+
+    const { DB } = require('../src/database/database.js');
+    const [users, more] = await DB.getUsers(1, 1, 'ali*');
+
+    expect(more).toBe(true);
+    expect(users).toHaveLength(1);
+    expect(users[0]).toEqual(
+      expect.objectContaining({
+        id: 3,
+        name: 'alice',
+        email: 'alice@jwt.com',
+        roles: [{ role: 'diner', objectId: undefined }],
+      })
+    );
+  });
+
+  test('getUsers normalizes invalid page/limit and default name filter', async () => {
+    mockNextExecuteBehavior = jest.fn(async (sql, params) => {
+      if (String(sql).startsWith('SELECT id, name, email FROM user WHERE name LIKE')) {
+        expect(params).toEqual(['%']);
+        return [{ id: 1, name: 'u', email: 'u@jwt.com' }];
+      }
+      if (String(sql).startsWith('SELECT role, objectId FROM userRole WHERE userId=')) {
+        return [{ role: 'admin', objectId: 0 }];
+      }
+      return defaultExecuteBehavior(sql, params);
+    });
+
+    const { DB } = require('../src/database/database.js');
+    const [users, more] = await DB.getUsers(-1, 0);
+
+    expect(more).toBe(false);
+    expect(users).toHaveLength(1);
+  });
+
+  test('deleteUser deletes related rows and commits transaction', async () => {
+    mockNextExecuteBehavior = jest.fn(async (sql, params) => {
+      if (String(sql).startsWith('DELETE FROM user WHERE id=')) {
+        expect(params).toEqual([9]);
+        return { affectedRows: 1 };
+      }
+      return defaultExecuteBehavior(sql, params);
+    });
+
+    const { DB } = require('../src/database/database.js');
+    await DB.deleteUser(9);
+
+    expect(mockLastConnection.beginTransaction).toHaveBeenCalled();
+    expect(mockLastConnection.commit).toHaveBeenCalled();
+    expect(mockLastConnection.rollback).not.toHaveBeenCalled();
+  });
+
+  test('deleteUser returns 404 for unknown user and rolls back', async () => {
+    mockNextExecuteBehavior = jest.fn(async (sql, params) => {
+      if (String(sql).startsWith('DELETE FROM user WHERE id=')) {
+        expect(params).toEqual([1234]);
+        return { affectedRows: 0 };
+      }
+      return defaultExecuteBehavior(sql, params);
+    });
+
+    const { DB } = require('../src/database/database.js');
+    await expect(DB.deleteUser(1234)).rejects.toMatchObject({ statusCode: 404 });
+    expect(mockLastConnection.rollback).toHaveBeenCalled();
+  });
+
+  test('deleteUser rolls back if delete query fails', async () => {
+    mockNextExecuteBehavior = jest.fn(async (sql, params) => {
+      if (String(sql).startsWith('DELETE a FROM auth AS a WHERE a.userId=')) {
+        throw new Error('db fail');
+      }
+      return defaultExecuteBehavior(sql, params);
+    });
+
+    const { DB } = require('../src/database/database.js');
+    await expect(DB.deleteUser(7)).rejects.toThrow('db fail');
+    expect(mockLastConnection.rollback).toHaveBeenCalled();
+  });
+
+  test('createFranchise creates franchise and assigns admins', async () => {
+    mockNextExecuteBehavior = jest.fn(async (sql, params) => {
+      if (String(sql).startsWith('SELECT id, name FROM user WHERE email=')) {
+        return [{ id: 4, name: 'fr admin' }];
+      }
+      if (String(sql).startsWith('INSERT INTO franchise')) {
+        return { insertId: 22 };
+      }
+      if (String(sql).startsWith('INSERT INTO userRole')) {
+        return { insertId: 100 };
+      }
+      return defaultExecuteBehavior(sql, params);
+    });
+
+    const { DB, Role } = require('../src/database/database.js');
+    const created = await DB.createFranchise({ name: 'pizzaPocket', admins: [{ email: 'fr@jwt.com' }] });
+
+    expect(created.id).toBe(22);
+    expect(created.admins).toEqual([{ email: 'fr@jwt.com', id: 4, name: 'fr admin' }]);
+    const usedFranchiseeRole = mockNextExecuteBehavior.mock.calls.some(
+      ([sql, params]) => String(sql).startsWith('INSERT INTO userRole') && params[1] === Role.Franchisee
+    );
+    expect(usedFranchiseeRole).toBe(true);
+  });
+
+  test('getUserFranchises returns empty when user has no franchises', async () => {
+    mockNextExecuteBehavior = jest.fn(async (sql, params) => {
+      if (String(sql).startsWith("SELECT objectId FROM userRole WHERE role='franchisee' AND userId=")) {
+        expect(params).toEqual([9]);
+        return [];
+      }
+      return defaultExecuteBehavior(sql, params);
+    });
+
+    const { DB } = require('../src/database/database.js');
+    const franchises = await DB.getUserFranchises(9);
+    expect(franchises).toEqual([]);
+  });
+
+  test('getUserFranchises loads franchise details when IDs exist', async () => {
+    mockNextExecuteBehavior = jest.fn(async (sql, params) => {
+      if (String(sql).startsWith("SELECT objectId FROM userRole WHERE role='franchisee' AND userId=")) {
+        return [{ objectId: 3 }];
+      }
+      if (String(sql).startsWith('SELECT id, name FROM franchise WHERE id in')) {
+        return [{ id: 3, name: 'f3' }];
+      }
+      if (String(sql).startsWith("SELECT u.id, u.name, u.email FROM userRole AS ur JOIN user AS u ON u.id=ur.userId WHERE ur.objectId=")) {
+        return [{ id: 4, name: 'admin', email: 'a@jwt.com' }];
+      }
+      if (String(sql).startsWith('SELECT s.id, s.name, COALESCE(SUM(oi.price), 0) AS totalRevenue FROM dinerOrder AS do JOIN orderItem AS oi ON do.id=oi.orderId RIGHT JOIN store AS s ON s.id=do.storeId WHERE s.franchiseId=')) {
+        return [{ id: 8, name: 'SLC', totalRevenue: 0 }];
+      }
+      return defaultExecuteBehavior(sql, params);
+    });
+
+    const { DB } = require('../src/database/database.js');
+    const franchises = await DB.getUserFranchises(4);
+
+    expect(franchises).toHaveLength(1);
+    expect(franchises[0]).toEqual(
+      expect.objectContaining({
+        id: 3,
+        admins: [{ id: 4, name: 'admin', email: 'a@jwt.com' }],
+        stores: [{ id: 8, name: 'SLC', totalRevenue: 0 }],
+      })
+    );
+  });
+
+  test('createStore and deleteStore execute expected queries', async () => {
+    mockNextExecuteBehavior = jest.fn(async (sql, params) => {
+      if (String(sql).startsWith('INSERT INTO store')) {
+        expect(params).toEqual([2, 'Provo']);
+        return { insertId: 88 };
+      }
+      return defaultExecuteBehavior(sql, params);
+    });
+
+    const { DB } = require('../src/database/database.js');
+    const store = await DB.createStore(2, { name: 'Provo' });
+    await DB.deleteStore(2, 88);
+
+    expect(store).toEqual({ id: 88, franchiseId: 2, name: 'Provo' });
+    const deletedStore = mockNextExecuteBehavior.mock.calls.some(
+      ([sql, params]) => String(sql).startsWith('DELETE FROM store WHERE franchiseId=') && params[0] === 2 && params[1] === 88
+    );
+    expect(deletedStore).toBe(true);
+  });
+
+  test('getID throws when no matching row exists', async () => {
+    const { DB } = require('../src/database/database.js');
+    const fakeConnection = { execute: jest.fn(async () => [[]]) };
+    await expect(DB.getID(fakeConnection, 'id', 1000, 'menu')).rejects.toThrow('No ID found');
+  });
+
+  test('checkDatabaseExists returns false when schema row is missing', async () => {
+    const { DB } = require('../src/database/database.js');
+    const fakeConnection = { execute: jest.fn(async () => [[]]) };
+    const exists = await DB.checkDatabaseExists(fakeConnection);
+    expect(exists).toBe(false);
+  });
+
+  test('initializeDatabase handles connection errors gracefully', async () => {
+    const { DB } = require('../src/database/database.js');
+    const originalGetConnection = DB._getConnection;
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    DB._getConnection = jest.fn(async () => {
+      throw new Error('cannot connect');
+    });
+
+    await DB.initializeDatabase();
+
+    expect(errorSpy).toHaveBeenCalled();
+    DB._getConnection = originalGetConnection;
+    errorSpy.mockRestore();
   });
 });

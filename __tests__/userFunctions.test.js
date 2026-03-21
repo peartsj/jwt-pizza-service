@@ -48,4 +48,50 @@ describe('user functions', () => {
     expect(getUsers).toHaveBeenCalledWith(2, 1, 'ali*');
     expect(listUsersRes.body).toEqual({ users, page: 2, limit: 1, more: true });
   });
+
+  test('delete user unauthorized', async () => {
+    const app = buildApp();
+    const deleteUserRes = await request(app).delete('/api/user/2');
+    expect(deleteUserRes.status).toBe(401);
+  });
+
+  test('delete user forbids deleting another user when not admin', async () => {
+    const deleteUser = jest.fn(async () => {});
+    const app = buildAuthedApp({ deleteUser });
+    const dinerHeader = authHeader({ id: 7, name: 'diner', email: 'd@jwt.com', roles: [{ role: 'diner' }] });
+
+    const deleteUserRes = await request(app)
+      .delete('/api/user/8')
+      .set('Authorization', dinerHeader);
+
+    expect(deleteUserRes.status).toBe(403);
+    expect(deleteUser).not.toHaveBeenCalled();
+  });
+
+  test('delete user allows deleting self', async () => {
+    const deleteUser = jest.fn(async () => {});
+    const app = buildAuthedApp({ deleteUser });
+    const dinerHeader = authHeader({ id: 7, name: 'diner', email: 'd@jwt.com', roles: [{ role: 'diner' }] });
+
+    const deleteUserRes = await request(app)
+      .delete('/api/user/7')
+      .set('Authorization', dinerHeader);
+
+    expect(deleteUserRes.status).toBe(200);
+    expect(deleteUser).toHaveBeenCalledWith(7);
+    expect(deleteUserRes.body.message).toMatch(/deleted/i);
+  });
+
+  test('delete user allows admin to delete another user', async () => {
+    const deleteUser = jest.fn(async () => {});
+    const app = buildAuthedApp({ deleteUser });
+
+    const deleteUserRes = await request(app)
+      .delete('/api/user/42')
+      .set('Authorization', authHeader());
+
+    expect(deleteUserRes.status).toBe(200);
+    expect(deleteUser).toHaveBeenCalledWith(42);
+    expect(deleteUserRes.body.message).toMatch(/deleted/i);
+  });
 });

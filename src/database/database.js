@@ -101,6 +101,29 @@ class DB {
     }
   }
 
+  async deleteUser(userId) {
+    const connection = await this.getConnection();
+    try {
+      await connection.beginTransaction();
+      try {
+        await this.query(connection, `DELETE a FROM auth AS a WHERE a.userId=?`, [userId]);
+        await this.query(connection, `DELETE oi FROM orderItem AS oi JOIN dinerOrder AS do ON oi.orderId=do.id WHERE do.dinerId=?`, [userId]);
+        await this.query(connection, `DELETE FROM dinerOrder WHERE dinerId=?`, [userId]);
+        await this.query(connection, `DELETE FROM userRole WHERE userId=?`, [userId]);
+        const result = await this.query(connection, `DELETE FROM user WHERE id=?`, [userId]);
+        if (result.affectedRows === 0) {
+          throw new StatusCodeError('unknown user', 404);
+        }
+        await connection.commit();
+      } catch (err) {
+        await connection.rollback();
+        throw err;
+      }
+    } finally {
+      connection.end();
+    }
+  }
+
   async updateUser(userId, name, email, password) {
     const connection = await this.getConnection();
     try {
