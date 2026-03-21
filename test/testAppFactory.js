@@ -20,6 +20,7 @@ function buildApp({ dbOverrides = {} } = {}) {
       logoutUser: jest.fn(async () => {}),
       addUser: jest.fn(async (u) => ({ ...u, id: 2, password: undefined })),
       getUser: jest.fn(async () => ({ id: 1, name: 'user', email: 'u@jwt.com', roles: [{ role: Role.Diner }] })),
+      getUsers: jest.fn(async () => [[], false]),
       updateUser: jest.fn(async (id, name, email) => ({ id, name: name ?? 'user', email: email ?? 'u@jwt.com', roles: [{ role: Role.Diner }] })),
 
       getMenu: jest.fn(async () => [{ id: 1, title: 'Veggie', image: 'pizza1.png', price: 0.0038, description: 'A garden of delight' }]),

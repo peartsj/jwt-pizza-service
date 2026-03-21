@@ -6,7 +6,8 @@
   "scripts": {
     "start": "cd src && node index.js",
     "lint": "eslint . --ext .js,.ts",
-    "test": "jest --coverage"
+    "test": "jest --coverage",
+    "reset-db": "node scripts/reset-db.js"
   },
   "license": "MIT",
   "dependencies": {

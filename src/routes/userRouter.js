@@ -2,10 +2,28 @@ const express = require('express');
 const { asyncHandler } = require('../endpointHelper.js');
 const { DB, Role } = require('../database/database.js');
 const { authRouter, setAuth } = require('./authRouter.js');
+const config = require('../config.js');
 
 const userRouter = express.Router();
 
 userRouter.docs = [
+  {
+    method: 'GET',
+    path: '/api/user?page=1&limit=10&name=*',
+    requiresAuth: true,
+    description: 'Gets a list of users',
+    example: `curl -X GET localhost:3000/api/user -H 'Authorization: Bearer tttttt'`,
+    response: {
+      users: [
+        {
+          id: 1,
+          name: '常用名字',
+          email: 'a@jwt.com',
+          roles: [{ role: 'admin' }],
+        },
+      ],
+    },
+  },
   {
     method: 'GET',
     path: '/api/user/me',
@@ -65,7 +83,14 @@ userRouter.get(
   '/',
   authRouter.authenticateToken,
   asyncHandler(async (req, res) => {
-    res.json({ message: 'not implemented', users: [], more: false });
+    const page = Number.parseInt(req.query.page, 10);
+    const limit = Number.parseInt(req.query.limit, 10);
+    const normalizedPage = Number.isFinite(page) && page > 0 ? page : 1;
+    const normalizedLimit = Number.isFinite(limit) && limit > 0 ? limit : config.db.listPerPage;
+    const nameFilter = req.query.name || '*';
+
+    const [users, more] = await DB.getUsers(normalizedPage, normalizedLimit, nameFilter);
+    res.json({ users, page: normalizedPage, limit: normalizedLimit, more });
   })
 );
 

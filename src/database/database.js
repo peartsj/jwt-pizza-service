@@ -75,6 +75,32 @@ class DB {
     }
   }
 
+  async getUsers(page = 1, limit = config.db.listPerPage, nameFilter = '*') {
+    const connection = await this.getConnection();
+    const normalizedPage = Number.isFinite(Number(page)) && Number(page) > 0 ? Number(page) : 1;
+    const normalizedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Number(limit) : config.db.listPerPage;
+    const offset = (normalizedPage - 1) * normalizedLimit;
+    const likeFilter = (nameFilter || '*').replace(/\*/g, '%');
+
+    try {
+      let users = await this.query(connection, `SELECT id, name, email FROM user WHERE name LIKE ? ORDER BY id LIMIT ${normalizedLimit + 1} OFFSET ${offset}`, [likeFilter]);
+
+      const more = users.length > normalizedLimit;
+      if (more) {
+        users = users.slice(0, normalizedLimit);
+      }
+
+      for (const user of users) {
+        const roleResult = await this.query(connection, `SELECT role, objectId FROM userRole WHERE userId=?`, [user.id]);
+        user.roles = roleResult.map((role) => ({ role: role.role, objectId: role.objectId || undefined }));
+      }
+
+      return [users, more];
+    } finally {
+      connection.end();
+    }
+  }
+
   async updateUser(userId, name, email, password) {
     const connection = await this.getConnection();
     try {
