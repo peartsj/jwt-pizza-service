@@ -92,6 +92,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write
+      contents: read
     needs: build
     env:
       version: ${{needs.build.outputs.version}}
