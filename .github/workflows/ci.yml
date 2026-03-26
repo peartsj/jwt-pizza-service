@@ -22,6 +22,12 @@ jobs:
     outputs:
       version: ${{ steps.set_version.outputs.version }}
     steps:
+      - name: Show runner architecture
+        run: |
+          uname -m
+          docker version
+          docker buildx ls
+    
       - name: Checkout repo
         uses: actions/checkout@v4
 
