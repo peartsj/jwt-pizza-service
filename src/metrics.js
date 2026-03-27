@@ -118,6 +118,9 @@ class MetricsService {
 		this.window = {
 			requests: 0,
 			requestsByMethod: this.#createMethodCounter(),
+			authAttempts: 0,
+			authSuccesses: 0,
+			authFailures: 0,
 			serviceLatencyMsTotal: 0,
 			serviceLatencyCount: 0,
 			pizzaCreationLatencyMsTotal: 0,
@@ -164,10 +167,13 @@ class MetricsService {
 
 	authenticationAttempt(success, action = 'auth') {
 		this.totals.authAttempts += 1;
+		this.window.authAttempts += 1;
 		if (success) {
 			this.totals.authSuccesses += 1;
+			this.window.authSuccesses += 1;
 		} else {
 			this.totals.authFailures += 1;
+			this.window.authFailures += 1;
 		}
 
 		const actionKey = this.#getAuthActionKey(action, success);
@@ -180,8 +186,7 @@ class MetricsService {
 			);
 		}
 
-		// These action-specific counters are represented through attributes.
-		this.#sendAuthActionMetric(action, success, actionTotal);
+		// Action-specific counters are sent in the periodic payload for consistent sampling.
 	}
 
 	userAuthenticated(userId) {
@@ -264,6 +269,14 @@ class MetricsService {
 		builder.addSum('auth_attempts_total', this.totals.authAttempts);
 		builder.addSum('auth_success_total', this.totals.authSuccesses);
 		builder.addSum('auth_failure_total', this.totals.authFailures);
+		builder.addGauge('auth_attempts_per_minute', this.window.authAttempts * requestRateScale);
+		builder.addGauge('auth_success_per_minute', this.window.authSuccesses * requestRateScale);
+		builder.addGauge('auth_failure_per_minute', this.window.authFailures * requestRateScale);
+
+		for (const [actionKey, value] of this.authActionTotals.entries()) {
+			const [action, successText] = actionKey.split('|');
+			builder.addSum('auth_attempts_by_action_total', value, '1', { action, success: successText === 'true' });
+		}
 
 		// System metrics.
 		builder.addGauge('cpu_usage_percent', cpuUsage, '%');
@@ -293,28 +306,6 @@ class MetricsService {
 		this.#resetWindowCounters();
 	}
 
-	#sendAuthActionMetric(action, success, value) {
-		// Action-level auth events are sent immediately to retain action context.
-		if (!this.#isConfiguredForSending() || typeof fetch !== 'function') {
-			return;
-		}
-
-		const builder = new OtelMetricBuilder(this.source);
-		builder.addSum('auth_attempts_by_action_total', value, '1', { action, success });
-		const body = JSON.stringify(builder.toPayload());
-
-		fetch(this.endpointUrl, {
-			method: 'POST',
-			body,
-			headers: {
-				Authorization: `Bearer ${this.accountId}:${this.apiKey}`,
-				'Content-Type': 'application/json',
-			},
-		}).catch((error) => {
-			console.error('Error sending auth action metric', error);
-		});
-	}
-
 	async #sendToGrafana(payload) {
 		if (!this.#isConfiguredForSending()) {
 			return;
@@ -326,18 +317,36 @@ class MetricsService {
 		}
 
 		const body = JSON.stringify(payload);
-		const response = await fetch(this.endpointUrl, {
-			method: 'POST',
-			body,
-			headers: {
-				Authorization: `Bearer ${this.accountId}:${this.apiKey}`,
-				'Content-Type': 'application/json',
-			},
-		});
 
-		if (!response.ok) {
-			const text = await response.text();
-			console.error(`Failed to push metrics data to Grafana: ${text}`);
+		for (let attempt = 1; attempt <= 2; attempt++) {
+			try {
+				const response = await fetch(this.endpointUrl, {
+					method: 'POST',
+					body,
+					headers: {
+						Authorization: `Bearer ${this.accountId}:${this.apiKey}`,
+						'Content-Type': 'application/json',
+					},
+				});
+
+				if (response.ok) {
+					return;
+				}
+
+				const text = await response.text();
+				const canRetry = this.#shouldRetryStatus(response.status);
+				if (!canRetry || attempt === 2) {
+					console.error(`Failed to push metrics data to Grafana: ${text}`);
+					return;
+				}
+			} catch (error) {
+				if (attempt === 2) {
+					console.error('Failed to push metrics data to Grafana', error);
+					return;
+				}
+			}
+
+			await this.#sleep(250 * attempt);
 		}
 	}
 
@@ -352,6 +361,14 @@ class MetricsService {
 
 	#getAuthActionKey(action, success) {
 		return `${action}|${success}`;
+	}
+
+	#shouldRetryStatus(status) {
+		return status === 429 || status >= 500;
+	}
+
+	#sleep(ms) {
+		return new Promise((resolve) => setTimeout(resolve, ms));
 	}
 
 	#normalizeMethod(method) {
@@ -410,6 +427,9 @@ class MetricsService {
 	#resetWindowCounters() {
 		this.window.requests = 0;
 		this.window.requestsByMethod = this.#createMethodCounter();
+		this.window.authAttempts = 0;
+		this.window.authSuccesses = 0;
+		this.window.authFailures = 0;
 		this.window.serviceLatencyMsTotal = 0;
 		this.window.serviceLatencyCount = 0;
 		this.window.pizzaCreationLatencyMsTotal = 0;
