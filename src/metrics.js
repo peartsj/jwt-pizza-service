@@ -124,6 +124,8 @@ class MetricsService {
 			pizzaCreationLatencyCount: 0,
 		};
 
+		this.authActionTotals = new Map();
+
 		this.activeUsers = new Set();
 		this.previousCpuSnapshot = this.#getCpuSnapshot();
 		this.reportingTimer = null;
@@ -168,8 +170,18 @@ class MetricsService {
 			this.totals.authFailures += 1;
 		}
 
+		const actionKey = this.#getAuthActionKey(action, success);
+		const actionTotal = (this.authActionTotals.get(actionKey) ?? 0) + 1;
+		this.authActionTotals.set(actionKey, actionTotal);
+
+		if (this.#isAuthDebugEnabled()) {
+			console.log(
+				`[metrics] auth attempt action=${action} success=${success} totals attempts=${this.totals.authAttempts} success=${this.totals.authSuccesses} failure=${this.totals.authFailures}`
+			);
+		}
+
 		// These action-specific counters are represented through attributes.
-		this.#sendAuthActionMetric(action, success);
+		this.#sendAuthActionMetric(action, success, actionTotal);
 	}
 
 	userAuthenticated(userId) {
@@ -271,18 +283,24 @@ class MetricsService {
 		builder.addSum('pizza_creation_latency_count_total', this.totals.pizzaCreationLatencyCount);
 		builder.addGauge('pizza_creation_latency_ms_avg', averagePizzaCreationLatency, 'ms');
 
+		if (this.#isAuthDebugEnabled()) {
+			console.log(
+				`[metrics] report auth totals attempts=${this.totals.authAttempts} success=${this.totals.authSuccesses} failure=${this.totals.authFailures}`
+			);
+		}
+
 		await this.#sendToGrafana(builder.toPayload());
 		this.#resetWindowCounters();
 	}
 
-	#sendAuthActionMetric(action, success) {
+	#sendAuthActionMetric(action, success, value) {
 		// Action-level auth events are sent immediately to retain action context.
 		if (!this.#isConfiguredForSending() || typeof fetch !== 'function') {
 			return;
 		}
 
 		const builder = new OtelMetricBuilder(this.source);
-		builder.addSum('auth_attempts_by_action_total', 1, '1', { action, success });
+		builder.addSum('auth_attempts_by_action_total', value, '1', { action, success });
 		const body = JSON.stringify(builder.toPayload());
 
 		fetch(this.endpointUrl, {
@@ -325,6 +343,15 @@ class MetricsService {
 
 	#isConfiguredForSending() {
 		return Boolean(this.endpointUrl && this.accountId && this.apiKey);
+	}
+
+	#isAuthDebugEnabled() {
+		const envEnabled = String(process.env.METRICS_DEBUG_AUTH || '').toLowerCase() === 'true';
+		return Boolean(config.metrics?.debugAuthLogs || envEnabled);
+	}
+
+	#getAuthActionKey(action, success) {
+		return `${action}|${success}`;
 	}
 
 	#normalizeMethod(method) {
