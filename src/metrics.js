@@ -128,6 +128,8 @@ class MetricsService {
 		};
 
 		this.authActionTotals = new Map();
+		this.authActionWindow = new Map();
+		this.authActions = new Set();
 
 		this.activeUsers = new Set();
 		this.previousCpuSnapshot = this.#getCpuSnapshot();
@@ -179,6 +181,9 @@ class MetricsService {
 		const actionKey = this.#getAuthActionKey(action, success);
 		const actionTotal = (this.authActionTotals.get(actionKey) ?? 0) + 1;
 		this.authActionTotals.set(actionKey, actionTotal);
+		const actionWindowCount = (this.authActionWindow.get(actionKey) ?? 0) + 1;
+		this.authActionWindow.set(actionKey, actionWindowCount);
+		this.authActions.add(String(action));
 
 		if (this.#isAuthDebugEnabled()) {
 			console.log(
@@ -272,6 +277,14 @@ class MetricsService {
 		builder.addGauge('auth_attempts_per_minute', this.window.authAttempts * requestRateScale);
 		builder.addGauge('auth_success_per_minute', this.window.authSuccesses * requestRateScale);
 		builder.addGauge('auth_failure_per_minute', this.window.authFailures * requestRateScale);
+
+		for (const action of this.authActions) {
+			const successCount = this.authActionWindow.get(this.#getAuthActionKey(action, true)) ?? 0;
+			const failureCount = this.authActionWindow.get(this.#getAuthActionKey(action, false)) ?? 0;
+
+			builder.addGauge('auth_success_by_action_per_minute', successCount * requestRateScale, '1', { action });
+			builder.addGauge('auth_failure_by_action_per_minute', failureCount * requestRateScale, '1', { action });
+		}
 
 		for (const [actionKey, value] of this.authActionTotals.entries()) {
 			const [action, successText] = actionKey.split('|');
@@ -430,6 +443,7 @@ class MetricsService {
 		this.window.authAttempts = 0;
 		this.window.authSuccesses = 0;
 		this.window.authFailures = 0;
+		this.authActionWindow.clear();
 		this.window.serviceLatencyMsTotal = 0;
 		this.window.serviceLatencyCount = 0;
 		this.window.pizzaCreationLatencyMsTotal = 0;
