@@ -103,9 +103,6 @@ class MetricsService {
 		this.totals = {
 			requests: 0,
 			requestsByMethod: this.#createMethodCounter(),
-			authAttempts: 0,
-			authSuccesses: 0,
-			authFailures: 0,
 			pizzasSold: 0,
 			pizzaCreationFailures: 0,
 			revenue: 0,
@@ -118,7 +115,6 @@ class MetricsService {
 		this.window = {
 			requests: 0,
 			requestsByMethod: this.#createMethodCounter(),
-			authAttempts: 0,
 			authSuccesses: 0,
 			authFailures: 0,
 			serviceLatencyMsTotal: 0,
@@ -126,10 +122,6 @@ class MetricsService {
 			pizzaCreationLatencyMsTotal: 0,
 			pizzaCreationLatencyCount: 0,
 		};
-
-		this.authActionTotals = new Map();
-		this.authActionWindow = new Map();
-		this.authActions = new Set();
 
 		this.activeUsers = new Set();
 		this.previousCpuSnapshot = this.#getCpuSnapshot();
@@ -167,31 +159,12 @@ class MetricsService {
 		next();
 	}
 
-	authenticationAttempt(success, action = 'auth') {
-		this.totals.authAttempts += 1;
-		this.window.authAttempts += 1;
+	authenticationAttempt(success, _action = 'auth') {
 		if (success) {
-			this.totals.authSuccesses += 1;
 			this.window.authSuccesses += 1;
 		} else {
-			this.totals.authFailures += 1;
 			this.window.authFailures += 1;
 		}
-
-		const actionKey = this.#getAuthActionKey(action, success);
-		const actionTotal = (this.authActionTotals.get(actionKey) ?? 0) + 1;
-		this.authActionTotals.set(actionKey, actionTotal);
-		const actionWindowCount = (this.authActionWindow.get(actionKey) ?? 0) + 1;
-		this.authActionWindow.set(actionKey, actionWindowCount);
-		this.authActions.add(String(action));
-
-		if (this.#isAuthDebugEnabled()) {
-			console.log(
-				`[metrics] auth attempt action=${action} success=${success} totals attempts=${this.totals.authAttempts} success=${this.totals.authSuccesses} failure=${this.totals.authFailures}`
-			);
-		}
-
-		// Action-specific counters are sent in the periodic payload for consistent sampling.
 	}
 
 	userAuthenticated(userId) {
@@ -271,25 +244,8 @@ class MetricsService {
 
 		// Active user + auth metrics.
 		builder.addGauge('active_users', this.activeUsers.size);
-		builder.addSum('auth_attempts_total', this.totals.authAttempts);
-		builder.addSum('auth_success_total', this.totals.authSuccesses);
-		builder.addSum('auth_failure_total', this.totals.authFailures);
-		builder.addGauge('auth_attempts_per_minute', this.window.authAttempts * requestRateScale);
 		builder.addGauge('auth_success_per_minute', this.window.authSuccesses * requestRateScale);
 		builder.addGauge('auth_failure_per_minute', this.window.authFailures * requestRateScale);
-
-		for (const action of this.authActions) {
-			const successCount = this.authActionWindow.get(this.#getAuthActionKey(action, true)) ?? 0;
-			const failureCount = this.authActionWindow.get(this.#getAuthActionKey(action, false)) ?? 0;
-
-			builder.addGauge('auth_success_by_action_per_minute', successCount * requestRateScale, '1', { action });
-			builder.addGauge('auth_failure_by_action_per_minute', failureCount * requestRateScale, '1', { action });
-		}
-
-		for (const [actionKey, value] of this.authActionTotals.entries()) {
-			const [action, successText] = actionKey.split('|');
-			builder.addSum('auth_attempts_by_action_total', value, '1', { action, success: successText === 'true' });
-		}
 
 		// System metrics.
 		builder.addGauge('cpu_usage_percent', cpuUsage, '%');
@@ -308,12 +264,6 @@ class MetricsService {
 		builder.addSum('pizza_creation_latency_ms_total', this.totals.pizzaCreationLatencyMsTotal, 'ms');
 		builder.addSum('pizza_creation_latency_count_total', this.totals.pizzaCreationLatencyCount);
 		builder.addGauge('pizza_creation_latency_ms_avg', averagePizzaCreationLatency, 'ms');
-
-		if (this.#isAuthDebugEnabled()) {
-			console.log(
-				`[metrics] report auth totals attempts=${this.totals.authAttempts} success=${this.totals.authSuccesses} failure=${this.totals.authFailures}`
-			);
-		}
 
 		await this.#sendToGrafana(builder.toPayload());
 		this.#resetWindowCounters();
@@ -365,15 +315,6 @@ class MetricsService {
 
 	#isConfiguredForSending() {
 		return Boolean(this.endpointUrl && this.accountId && this.apiKey);
-	}
-
-	#isAuthDebugEnabled() {
-		const envEnabled = String(process.env.METRICS_DEBUG_AUTH || '').toLowerCase() === 'true';
-		return Boolean(config.metrics?.debugAuthLogs || envEnabled);
-	}
-
-	#getAuthActionKey(action, success) {
-		return `${action}|${success}`;
 	}
 
 	#shouldRetryStatus(status) {
@@ -440,10 +381,8 @@ class MetricsService {
 	#resetWindowCounters() {
 		this.window.requests = 0;
 		this.window.requestsByMethod = this.#createMethodCounter();
-		this.window.authAttempts = 0;
 		this.window.authSuccesses = 0;
 		this.window.authFailures = 0;
-		this.authActionWindow.clear();
 		this.window.serviceLatencyMsTotal = 0;
 		this.window.serviceLatencyCount = 0;
 		this.window.pizzaCreationLatencyMsTotal = 0;
