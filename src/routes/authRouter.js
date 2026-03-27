@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const config = require('../config.js');
 const { asyncHandler } = require('../endpointHelper.js');
 const { DB, Role } = require('../database/database.js');
+const metrics = require('../metrics.js');
 
 const authRouter = express.Router();
 
@@ -61,11 +62,20 @@ authRouter.post(
   asyncHandler(async (req, res) => {
     const { name, email, password } = req.body;
     if (!name || !email || !password) {
+      metrics.authenticationAttempt(false, 'register');
       return res.status(400).json({ message: 'name, email, and password are required' });
     }
-    const user = await DB.addUser({ name, email, password, roles: [{ role: Role.Diner }] });
-    const auth = await setAuth(user);
-    res.json({ user: user, token: auth });
+
+    try {
+      const user = await DB.addUser({ name, email, password, roles: [{ role: Role.Diner }] });
+      const auth = await setAuth(user);
+      metrics.authenticationAttempt(true, 'register');
+      metrics.userAuthenticated(user.id);
+      res.json({ user: user, token: auth });
+    } catch (error) {
+      metrics.authenticationAttempt(false, 'register');
+      throw error;
+    }
   })
 );
 
@@ -73,10 +83,17 @@ authRouter.post(
 authRouter.put(
   '/',
   asyncHandler(async (req, res) => {
-    const { email, password } = req.body;
-    const user = await DB.getUser(email, password);
-    const auth = await setAuth(user);
-    res.json({ user: user, token: auth });
+    try {
+      const { email, password } = req.body;
+      const user = await DB.getUser(email, password);
+      const auth = await setAuth(user);
+      metrics.authenticationAttempt(true, 'login');
+      metrics.userAuthenticated(user.id);
+      res.json({ user: user, token: auth });
+    } catch (error) {
+      metrics.authenticationAttempt(false, 'login');
+      throw error;
+    }
   })
 );
 
@@ -86,6 +103,7 @@ authRouter.delete(
   authRouter.authenticateToken,
   asyncHandler(async (req, res) => {
     await clearAuth(req);
+    metrics.userLoggedOut(req.user?.id);
     res.json({ message: 'logout successful' });
   })
 );
