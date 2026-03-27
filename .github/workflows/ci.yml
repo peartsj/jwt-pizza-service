@@ -55,10 +55,11 @@ jobs:
               apiKey: '${{ secrets.FACTORY_API_KEY }}',
             },
             metrics: {
-              source: 'jwt-pizza-service;,
+              source: 'jwt-pizza-service',
+              reportPeriodMs: 10000,
               endpointUrl: '${{ secrets.METRICS_ENDPOINT_URL }}',
               apiKey: '${{ secrets.METRICS_API_KEY }}',
-              accountId: '${{ secrets.METRICS_ACCOUNT_ID_KEY }}',
+              accountId: '${{ secrets.METRICS_ACCOUNT_ID }}',
             },
           };" > src/config.js
 
