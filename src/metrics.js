@@ -128,7 +128,6 @@ class MetricsService {
 		this.authWindowMs = 60_000;
 
 		this.activeUsers = new Set();
-		this.previousCpuSnapshot = this.#getCpuSnapshot();
 		this.reportingTimer = null;
 
 		this.requestTracker = this.requestTracker.bind(this);
@@ -362,35 +361,13 @@ class MetricsService {
 		const totalMemory = os.totalmem();
 		const freeMemory = os.freemem();
 		const usedMemory = totalMemory - freeMemory;
-		return Number(((usedMemory / totalMemory) * 100).toFixed(2));
+		const memoryUsage = (usedMemory / totalMemory) * 100;
+		return memoryUsage.toFixed(2);
 	}
 
 	#getCpuUsagePercentage() {
-		const current = this.#getCpuSnapshot();
-		const previous = this.previousCpuSnapshot;
-		this.previousCpuSnapshot = current;
-
-		const idleDiff = current.idle - previous.idle;
-		const totalDiff = current.total - previous.total;
-		if (totalDiff <= 0) {
-			return 0;
-		}
-
-		const usage = ((1 - idleDiff / totalDiff) * 100).toFixed(2);
-		return Number(usage);
-	}
-
-	#getCpuSnapshot() {
-		const cpus = os.cpus();
-		let idle = 0;
-		let total = 0;
-
-		for (const cpu of cpus) {
-			idle += cpu.times.idle;
-			total += cpu.times.user + cpu.times.nice + cpu.times.sys + cpu.times.idle + cpu.times.irq;
-		}
-
-		return { idle, total };
+		const cpuUsage = os.loadavg()[0] / os.cpus().length;
+		return cpuUsage.toFixed(2) * 100;
 	}
 
 	#countRecentEvents(queue, nowMs) {
