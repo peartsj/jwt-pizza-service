@@ -20,13 +20,16 @@ class OtelMetricBuilder {
 		});
 	}
 
-	addSum(name, value, unit = '1', attributes = {}) {
+	addSum(name, value, unit = '1', attributes = {}, options = {}) {
+		const aggregationTemporality = options.aggregationTemporality ?? 'AGGREGATION_TEMPORALITY_CUMULATIVE';
+		const isMonotonic = options.isMonotonic ?? true;
+
 		this.metrics.push({
 			name,
 			unit,
 			sum: {
-				aggregationTemporality: 'AGGREGATION_TEMPORALITY_CUMULATIVE',
-				isMonotonic: true,
+				aggregationTemporality,
+				isMonotonic,
 				dataPoints: [this.#toDataPoint(value, attributes)],
 			},
 		});
@@ -283,8 +286,8 @@ class MetricsService {
 		builder.addGauge('memory_usage_percent', memoryUsage, '%');
 
 		// Purchase metrics.
-		builder.addGauge('pizzas_sold_total', pizzasSoldPerMinute);
-		builder.addGauge('pizza_creation_failures_total', pizzaCreationFailuresPerMinute);
+		builder.addSum('pizzas_sold_total', pizzasSoldPerMinute, '1', {}, { isMonotonic: false });
+		builder.addSum('pizza_creation_failures_total', pizzaCreationFailuresPerMinute, '1', {}, { isMonotonic: false });
 		builder.addSum('pizza_revenue_total', this.totals.revenue, 'USD');
 
 		// Latency metrics.
