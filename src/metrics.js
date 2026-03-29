@@ -105,7 +105,6 @@ class MetricsService {
 			requestsByMethod: this.#createMethodCounter(),
 			authSuccesses: 0,
 			authFailures: 0,
-			pizzaPurchaseAttempts: 0,
 			pizzasSold: 0,
 			pizzaCreationFailures: 0,
 			revenue: 0,
@@ -120,7 +119,8 @@ class MetricsService {
 			requestTimestampsByMethod: this.#createMethodEventBuckets(),
 			authSuccessTimestamps: [],
 			authFailureTimestamps: [],
-			pizzaPurchaseAttemptTimestamps: [],
+			pizzaCreationFailureTimestamps: [],
+			pizzaSoldEvents: [],
 			serviceLatencyMsTotal: 0,
 			serviceLatencyCount: 0,
 			pizzaCreationEvents: [],
@@ -128,8 +128,8 @@ class MetricsService {
 
 		this.requestWindowMs = 60_000;
 		this.authWindowMs = 60_000;
+		this.pizzaWindowMs = 60_000;
 		this.pizzaLatencyWindowMs = 60_000;
-		this.pizzaPurchaseAttemptWindowMs = 60_000;
 
 		this.activeUsers = new Set();
 		this.reportingTimer = null;
@@ -198,23 +198,23 @@ class MetricsService {
 		const timestampMs = Date.now();
 		const safeLatency = Number.isFinite(Number(latencyMs)) ? Number(latencyMs) : 0;
 		const safePrice = Number.isFinite(Number(price)) ? Number(price) : 0;
-		const safeQuantity = Number.isFinite(Number(quantity)) ? Number(quantity) : 0;
-
-		this.totals.pizzaPurchaseAttempts += 1;
-		this.window.pizzaPurchaseAttemptTimestamps.push(timestampMs);
-		this.#prunePizzaPurchaseAttemptWindow(timestampMs);
+		const safeQuantity = Number.isFinite(Number(quantity)) ? Math.max(0, Math.trunc(Number(quantity))) : 0;
 
 		if (success) {
 			this.totals.pizzaCreationLatencyMsTotal += safeLatency;
 			this.totals.pizzaCreationLatencyCount += 1;
 			this.window.pizzaCreationEvents.push({ timestampMs, latencyMs: safeLatency });
+			this.window.pizzaSoldEvents.push({ timestampMs, quantity: safeQuantity });
 			this.#prunePizzaLatencyWindow(timestampMs);
 
 			this.totals.pizzasSold += safeQuantity;
 			this.totals.revenue += safePrice;
 		} else {
 			this.totals.pizzaCreationFailures += 1;
+			this.window.pizzaCreationFailureTimestamps.push(timestampMs);
 		}
+
+		this.#prunePizzaMinuteWindows(timestampMs);
 	}
 
 	start() {
@@ -249,11 +249,8 @@ class MetricsService {
 		const requestsPerMinute = this.#countRecentEvents(this.window.requestTimestamps, now, this.requestWindowMs);
 		const authSuccessPerMinute = this.#countRecentEvents(this.window.authSuccessTimestamps, now);
 		const authFailurePerMinute = this.#countRecentEvents(this.window.authFailureTimestamps, now);
-		const pizzaPurchaseAttemptsPerMinute = this.#countRecentEvents(
-			this.window.pizzaPurchaseAttemptTimestamps,
-			now,
-			this.pizzaPurchaseAttemptWindowMs
-		);
+		const pizzaCreationFailuresPerMinute = this.#countRecentEvents(this.window.pizzaCreationFailureTimestamps, now, this.pizzaWindowMs);
+		const pizzasSoldPerMinute = this.#sumRecentQuantityEvents(this.window.pizzaSoldEvents, now, this.pizzaWindowMs);
 
 		const averageServiceLatency =
 			this.window.serviceLatencyCount > 0 ? this.window.serviceLatencyMsTotal / this.window.serviceLatencyCount : 0;
@@ -286,10 +283,8 @@ class MetricsService {
 		builder.addGauge('memory_usage_percent', memoryUsage, '%');
 
 		// Purchase metrics.
-		builder.addSum('pizzas_sold_total', this.totals.pizzasSold);
-		builder.addSum('pizza_creation_failures_total', this.totals.pizzaCreationFailures);
-		builder.addSum('pizza_purchase_attempts_total', this.totals.pizzaPurchaseAttempts);
-		builder.addGauge('pizza_purchase_attempts_per_minute', pizzaPurchaseAttemptsPerMinute);
+		builder.addGauge('pizzas_sold_total', pizzasSoldPerMinute);
+		builder.addGauge('pizza_creation_failures_total', pizzaCreationFailuresPerMinute);
 		builder.addSum('pizza_revenue_total', this.totals.revenue, 'USD');
 
 		// Latency metrics.
@@ -442,8 +437,18 @@ class MetricsService {
 		}
 	}
 
-	#prunePizzaPurchaseAttemptWindow(nowMs) {
-		this.#countRecentEvents(this.window.pizzaPurchaseAttemptTimestamps, nowMs, this.pizzaPurchaseAttemptWindowMs);
+	#sumRecentQuantityEvents(events, nowMs, windowMs) {
+		const cutoff = nowMs - windowMs;
+		while (events.length > 0 && events[0].timestampMs <= cutoff) {
+			events.shift();
+		}
+
+		return events.reduce((sum, event) => sum + event.quantity, 0);
+	}
+
+	#prunePizzaMinuteWindows(nowMs) {
+		this.#countRecentEvents(this.window.pizzaCreationFailureTimestamps, nowMs, this.pizzaWindowMs);
+		this.#sumRecentQuantityEvents(this.window.pizzaSoldEvents, nowMs, this.pizzaWindowMs);
 	}
 
 	#resetWindowCounters() {

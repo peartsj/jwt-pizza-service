@@ -25,6 +25,10 @@ function readMetricValue(metric) {
   return dataPoint.asInt ?? dataPoint.asDouble;
 }
 
+function readMetricPoint(metric) {
+  return metric.gauge?.dataPoints?.[0] ?? metric.sum?.dataPoints?.[0];
+}
+
 describe('metrics reporting', () => {
   beforeEach(() => {
     jest.useFakeTimers();
@@ -166,9 +170,13 @@ describe('metrics reporting', () => {
     await metrics.reportMetrics();
     let payload = JSON.parse(global.fetch.mock.calls[0][1].body);
     expect(readMetricValue(findMetric(payload, 'pizza_creation_latency_ms_avg'))).toBeCloseTo(30, 5);
-    expect(readMetricValue(findMetric(payload, 'pizza_purchase_attempts_per_minute'))).toBe(3);
-    expect(readMetricValue(findMetric(payload, 'pizza_purchase_attempts_total'))).toBe(3);
     expect(readMetricValue(findMetric(payload, 'pizza_creation_failures_total'))).toBe(1);
+    expect(readMetricValue(findMetric(payload, 'pizzas_sold_total'))).toBe(2);
+
+    const soldPoint = readMetricPoint(findMetric(payload, 'pizzas_sold_total'));
+    const failuresPoint = readMetricPoint(findMetric(payload, 'pizza_creation_failures_total'));
+    expect(soldPoint.asInt).toBeDefined();
+    expect(failuresPoint.asInt).toBeDefined();
 
     jest.setSystemTime(new Date('2026-01-01T00:00:50.000Z'));
     await metrics.reportMetrics();
@@ -179,13 +187,15 @@ describe('metrics reporting', () => {
     await metrics.reportMetrics();
     payload = JSON.parse(global.fetch.mock.calls[2][1].body);
     expect(readMetricValue(findMetric(payload, 'pizza_creation_latency_ms_avg'))).toBeCloseTo(20, 5);
+    expect(readMetricValue(findMetric(payload, 'pizza_creation_failures_total'))).toBe(1);
+    expect(readMetricValue(findMetric(payload, 'pizzas_sold_total'))).toBe(1);
 
     jest.setSystemTime(new Date('2026-01-01T00:01:11.000Z'));
     await metrics.reportMetrics();
     payload = JSON.parse(global.fetch.mock.calls[3][1].body);
     expect(readMetricValue(findMetric(payload, 'pizza_creation_latency_ms_avg'))).toBe(0);
-    expect(readMetricValue(findMetric(payload, 'pizza_purchase_attempts_per_minute'))).toBe(1);
-    expect(readMetricValue(findMetric(payload, 'pizza_purchase_attempts_total'))).toBe(3);
+    expect(readMetricValue(findMetric(payload, 'pizza_creation_failures_total'))).toBe(1);
+    expect(readMetricValue(findMetric(payload, 'pizzas_sold_total'))).toBe(0);
 
     metrics.stop();
   });
