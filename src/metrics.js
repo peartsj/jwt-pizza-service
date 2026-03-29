@@ -103,6 +103,8 @@ class MetricsService {
 		this.totals = {
 			requests: 0,
 			requestsByMethod: this.#createMethodCounter(),
+			authSuccesses: 0,
+			authFailures: 0,
 			pizzasSold: 0,
 			pizzaCreationFailures: 0,
 			revenue: 0,
@@ -115,13 +117,15 @@ class MetricsService {
 		this.window = {
 			requests: 0,
 			requestsByMethod: this.#createMethodCounter(),
-			authSuccesses: 0,
-			authFailures: 0,
+			authSuccessTimestamps: [],
+			authFailureTimestamps: [],
 			serviceLatencyMsTotal: 0,
 			serviceLatencyCount: 0,
 			pizzaCreationLatencyMsTotal: 0,
 			pizzaCreationLatencyCount: 0,
 		};
+
+		this.authWindowMs = 60_000;
 
 		this.activeUsers = new Set();
 		this.previousCpuSnapshot = this.#getCpuSnapshot();
@@ -160,11 +164,17 @@ class MetricsService {
 	}
 
 	authenticationAttempt(success, _action = 'auth') {
+		const timestampMs = Date.now();
+
 		if (success) {
-			this.window.authSuccesses += 1;
+			this.totals.authSuccesses += 1;
+			this.window.authSuccessTimestamps.push(timestampMs);
 		} else {
-			this.window.authFailures += 1;
+			this.totals.authFailures += 1;
+			this.window.authFailureTimestamps.push(timestampMs);
 		}
+
+		this.#pruneAuthWindow(timestampMs);
 	}
 
 	userAuthenticated(userId) {
@@ -225,7 +235,10 @@ class MetricsService {
 	async reportMetrics() {
 		const cpuUsage = this.#getCpuUsagePercentage();
 		const memoryUsage = this.#getMemoryUsagePercentage();
+		const now = Date.now();
 		const requestRateScale = 60_000 / this.reportPeriodMs;
+		const authSuccessPerMinute = this.#countRecentEvents(this.window.authSuccessTimestamps, now);
+		const authFailurePerMinute = this.#countRecentEvents(this.window.authFailureTimestamps, now);
 
 		const averageServiceLatency =
 			this.window.serviceLatencyCount > 0 ? this.window.serviceLatencyMsTotal / this.window.serviceLatencyCount : 0;
@@ -244,8 +257,10 @@ class MetricsService {
 
 		// Active user + auth metrics.
 		builder.addGauge('active_users', this.activeUsers.size);
-		builder.addGauge('auth_success_per_minute', this.window.authSuccesses * requestRateScale);
-		builder.addGauge('auth_failure_per_minute', this.window.authFailures * requestRateScale);
+		builder.addGauge('auth_success_per_minute', authSuccessPerMinute);
+		builder.addGauge('auth_failure_per_minute', authFailurePerMinute);
+		builder.addSum('auth_success_total', this.totals.authSuccesses);
+		builder.addSum('auth_failure_total', this.totals.authFailures);
 
 		// System metrics.
 		builder.addGauge('cpu_usage_percent', cpuUsage, '%');
@@ -378,11 +393,23 @@ class MetricsService {
 		return { idle, total };
 	}
 
+	#countRecentEvents(queue, nowMs) {
+		const cutoff = nowMs - this.authWindowMs;
+		while (queue.length > 0 && queue[0] <= cutoff) {
+			queue.shift();
+		}
+
+		return queue.length;
+	}
+
+	#pruneAuthWindow(nowMs) {
+		this.#countRecentEvents(this.window.authSuccessTimestamps, nowMs);
+		this.#countRecentEvents(this.window.authFailureTimestamps, nowMs);
+	}
+
 	#resetWindowCounters() {
 		this.window.requests = 0;
 		this.window.requestsByMethod = this.#createMethodCounter();
-		this.window.authSuccesses = 0;
-		this.window.authFailures = 0;
 		this.window.serviceLatencyMsTotal = 0;
 		this.window.serviceLatencyCount = 0;
 		this.window.pizzaCreationLatencyMsTotal = 0;
