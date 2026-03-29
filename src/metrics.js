@@ -105,6 +105,7 @@ class MetricsService {
 			requestsByMethod: this.#createMethodCounter(),
 			authSuccesses: 0,
 			authFailures: 0,
+			pizzaPurchaseAttempts: 0,
 			pizzasSold: 0,
 			pizzaCreationFailures: 0,
 			revenue: 0,
@@ -115,17 +116,20 @@ class MetricsService {
 		};
 
 		this.window = {
-			requests: 0,
-			requestsByMethod: this.#createMethodCounter(),
+			requestTimestamps: [],
+			requestTimestampsByMethod: this.#createMethodEventBuckets(),
 			authSuccessTimestamps: [],
 			authFailureTimestamps: [],
+			pizzaPurchaseAttemptTimestamps: [],
 			serviceLatencyMsTotal: 0,
 			serviceLatencyCount: 0,
 			pizzaCreationEvents: [],
 		};
 
+		this.requestWindowMs = 60_000;
 		this.authWindowMs = 60_000;
 		this.pizzaLatencyWindowMs = 60_000;
+		this.pizzaPurchaseAttemptWindowMs = 60_000;
 
 		this.activeUsers = new Set();
 		this.reportingTimer = null;
@@ -142,6 +146,7 @@ class MetricsService {
 		const method = this.#normalizeMethod(req.method);
 
 		res.on('finish', () => {
+			const timestampMs = Date.now();
 			const elapsedMs = Number(process.hrtime.bigint() - startTime) / 1_000_000;
 
 			this.totals.requests += 1;
@@ -149,10 +154,11 @@ class MetricsService {
 			this.totals.serviceLatencyMsTotal += elapsedMs;
 			this.totals.serviceLatencyCount += 1;
 
-			this.window.requests += 1;
-			this.window.requestsByMethod[method] += 1;
+			this.window.requestTimestamps.push(timestampMs);
+			this.window.requestTimestampsByMethod[method].push(timestampMs);
 			this.window.serviceLatencyMsTotal += elapsedMs;
 			this.window.serviceLatencyCount += 1;
+			this.#pruneRequestWindow(timestampMs);
 
 			if (req.user?.id) {
 				this.activeUsers.add(req.user.id);
@@ -193,6 +199,10 @@ class MetricsService {
 		const safeLatency = Number.isFinite(Number(latencyMs)) ? Number(latencyMs) : 0;
 		const safePrice = Number.isFinite(Number(price)) ? Number(price) : 0;
 		const safeQuantity = Number.isFinite(Number(quantity)) ? Number(quantity) : 0;
+
+		this.totals.pizzaPurchaseAttempts += 1;
+		this.window.pizzaPurchaseAttemptTimestamps.push(timestampMs);
+		this.#prunePizzaPurchaseAttemptWindow(timestampMs);
 
 		this.totals.pizzaCreationLatencyMsTotal += safeLatency;
 		this.totals.pizzaCreationLatencyCount += 1;
@@ -236,9 +246,14 @@ class MetricsService {
 		const cpuUsage = this.#getCpuUsagePercentage();
 		const memoryUsage = this.#getMemoryUsagePercentage();
 		const now = Date.now();
-		const requestRateScale = 60_000 / this.reportPeriodMs;
+		const requestsPerMinute = this.#countRecentEvents(this.window.requestTimestamps, now, this.requestWindowMs);
 		const authSuccessPerMinute = this.#countRecentEvents(this.window.authSuccessTimestamps, now);
 		const authFailurePerMinute = this.#countRecentEvents(this.window.authFailureTimestamps, now);
+		const pizzaPurchaseAttemptsPerMinute = this.#countRecentEvents(
+			this.window.pizzaPurchaseAttemptTimestamps,
+			now,
+			this.pizzaPurchaseAttemptWindowMs
+		);
 
 		const averageServiceLatency =
 			this.window.serviceLatencyCount > 0 ? this.window.serviceLatencyMsTotal / this.window.serviceLatencyCount : 0;
@@ -248,10 +263,15 @@ class MetricsService {
 
 		// Request metrics (counters + per-minute gauge).
 		builder.addSum('http_requests_total', this.totals.requests);
-		builder.addGauge('http_requests_per_minute', this.window.requests * requestRateScale, '1', { method: 'ALL' });
+		builder.addGauge('http_requests_per_minute', requestsPerMinute, '1', { method: 'ALL' });
 		for (const method of TRACKED_METHODS) {
+			const methodRequestsPerMinute = this.#countRecentEvents(
+				this.window.requestTimestampsByMethod[method],
+				now,
+				this.requestWindowMs
+			);
 			builder.addSum('http_requests_by_method_total', this.totals.requestsByMethod[method], '1', { method });
-			builder.addGauge('http_requests_per_minute', this.window.requestsByMethod[method] * requestRateScale, '1', { method });
+			builder.addGauge('http_requests_per_minute', methodRequestsPerMinute, '1', { method });
 		}
 
 		// Active user + auth metrics.
@@ -268,6 +288,8 @@ class MetricsService {
 		// Purchase metrics.
 		builder.addSum('pizzas_sold_total', this.totals.pizzasSold);
 		builder.addSum('pizza_creation_failures_total', this.totals.pizzaCreationFailures);
+		builder.addSum('pizza_purchase_attempts_total', this.totals.pizzaPurchaseAttempts);
+		builder.addGauge('pizza_purchase_attempts_per_minute', pizzaPurchaseAttemptsPerMinute);
 		builder.addSum('pizza_revenue_total', this.totals.revenue, 'USD');
 
 		// Latency metrics.
@@ -357,6 +379,16 @@ class MetricsService {
 		};
 	}
 
+	#createMethodEventBuckets() {
+		return {
+			GET: [],
+			PUT: [],
+			POST: [],
+			DELETE: [],
+			OTHER: [],
+		};
+	}
+
 	#getMemoryUsagePercentage() {
 		const totalMemory = os.totalmem();
 		const freeMemory = os.freemem();
@@ -370,13 +402,20 @@ class MetricsService {
 		return cpuUsage.toFixed(2) * 100;
 	}
 
-	#countRecentEvents(queue, nowMs) {
-		const cutoff = nowMs - this.authWindowMs;
+	#countRecentEvents(queue, nowMs, windowMs = this.authWindowMs) {
+		const cutoff = nowMs - windowMs;
 		while (queue.length > 0 && queue[0] <= cutoff) {
 			queue.shift();
 		}
 
 		return queue.length;
+	}
+
+	#pruneRequestWindow(nowMs) {
+		this.#countRecentEvents(this.window.requestTimestamps, nowMs, this.requestWindowMs);
+		for (const method of Object.keys(this.window.requestTimestampsByMethod)) {
+			this.#countRecentEvents(this.window.requestTimestampsByMethod[method], nowMs, this.requestWindowMs);
+		}
 	}
 
 	#pruneAuthWindow(nowMs) {
@@ -403,9 +442,11 @@ class MetricsService {
 		}
 	}
 
+	#prunePizzaPurchaseAttemptWindow(nowMs) {
+		this.#countRecentEvents(this.window.pizzaPurchaseAttemptTimestamps, nowMs, this.pizzaPurchaseAttemptWindowMs);
+	}
+
 	#resetWindowCounters() {
-		this.window.requests = 0;
-		this.window.requestsByMethod = this.#createMethodCounter();
 		this.window.serviceLatencyMsTotal = 0;
 		this.window.serviceLatencyCount = 0;
 	}
