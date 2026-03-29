@@ -204,12 +204,12 @@ class MetricsService {
 		this.window.pizzaPurchaseAttemptTimestamps.push(timestampMs);
 		this.#prunePizzaPurchaseAttemptWindow(timestampMs);
 
-		this.totals.pizzaCreationLatencyMsTotal += safeLatency;
-		this.totals.pizzaCreationLatencyCount += 1;
-		this.window.pizzaCreationEvents.push({ timestampMs, latencyMs: safeLatency });
-		this.#prunePizzaLatencyWindow(timestampMs);
-
 		if (success) {
+			this.totals.pizzaCreationLatencyMsTotal += safeLatency;
+			this.totals.pizzaCreationLatencyCount += 1;
+			this.window.pizzaCreationEvents.push({ timestampMs, latencyMs: safeLatency });
+			this.#prunePizzaLatencyWindow(timestampMs);
+
 			this.totals.pizzasSold += safeQuantity;
 			this.totals.revenue += safePrice;
 		} else {

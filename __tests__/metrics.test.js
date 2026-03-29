@@ -160,12 +160,15 @@ describe('metrics reporting', () => {
     metrics.pizzaPurchase(true, 40, 1, 1);
     jest.setSystemTime(new Date('2026-01-01T00:00:10.000Z'));
     metrics.pizzaPurchase(true, 20, 1, 1);
+    jest.setSystemTime(new Date('2026-01-01T00:00:20.000Z'));
+    metrics.pizzaPurchase(false, 500, 0, 0);
 
     await metrics.reportMetrics();
     let payload = JSON.parse(global.fetch.mock.calls[0][1].body);
     expect(readMetricValue(findMetric(payload, 'pizza_creation_latency_ms_avg'))).toBeCloseTo(30, 5);
-    expect(readMetricValue(findMetric(payload, 'pizza_purchase_attempts_per_minute'))).toBe(2);
-    expect(readMetricValue(findMetric(payload, 'pizza_purchase_attempts_total'))).toBe(2);
+    expect(readMetricValue(findMetric(payload, 'pizza_purchase_attempts_per_minute'))).toBe(3);
+    expect(readMetricValue(findMetric(payload, 'pizza_purchase_attempts_total'))).toBe(3);
+    expect(readMetricValue(findMetric(payload, 'pizza_creation_failures_total'))).toBe(1);
 
     jest.setSystemTime(new Date('2026-01-01T00:00:50.000Z'));
     await metrics.reportMetrics();
@@ -181,8 +184,8 @@ describe('metrics reporting', () => {
     await metrics.reportMetrics();
     payload = JSON.parse(global.fetch.mock.calls[3][1].body);
     expect(readMetricValue(findMetric(payload, 'pizza_creation_latency_ms_avg'))).toBe(0);
-    expect(readMetricValue(findMetric(payload, 'pizza_purchase_attempts_per_minute'))).toBe(0);
-    expect(readMetricValue(findMetric(payload, 'pizza_purchase_attempts_total'))).toBe(2);
+    expect(readMetricValue(findMetric(payload, 'pizza_purchase_attempts_per_minute'))).toBe(1);
+    expect(readMetricValue(findMetric(payload, 'pizza_purchase_attempts_total'))).toBe(3);
 
     metrics.stop();
   });
