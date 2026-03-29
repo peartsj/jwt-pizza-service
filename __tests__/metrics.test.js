@@ -75,4 +75,46 @@ describe('metrics auth reporting', () => {
 
     metrics.stop();
   });
+
+  test('reports pizza creation latency as rolling 60s average', async () => {
+    jest.doMock('../src/config.js', () => ({
+      jwtSecret: 'test-secret',
+      db: { connection: {} },
+      factory: { url: 'http://factory.test', apiKey: 'factory-key' },
+      metrics: {
+        source: 'jwt-pizza-service-test',
+        reportPeriodMs: 10000,
+        endpointUrl: 'http://grafana.test/otlp/v1/metrics',
+        accountId: 'acct',
+        apiKey: 'key',
+      },
+    }));
+
+    const metrics = require('../src/metrics.js');
+
+    metrics.pizzaPurchase(true, 40, 1, 1);
+    jest.setSystemTime(new Date('2026-01-01T00:00:10.000Z'));
+    metrics.pizzaPurchase(true, 20, 1, 1);
+
+    await metrics.reportMetrics();
+    let payload = JSON.parse(global.fetch.mock.calls[0][1].body);
+    expect(readMetricValue(findMetric(payload, 'pizza_creation_latency_ms_avg'))).toBeCloseTo(30, 5);
+
+    jest.setSystemTime(new Date('2026-01-01T00:00:50.000Z'));
+    await metrics.reportMetrics();
+    payload = JSON.parse(global.fetch.mock.calls[1][1].body);
+    expect(readMetricValue(findMetric(payload, 'pizza_creation_latency_ms_avg'))).toBeCloseTo(30, 5);
+
+    jest.setSystemTime(new Date('2026-01-01T00:01:01.000Z'));
+    await metrics.reportMetrics();
+    payload = JSON.parse(global.fetch.mock.calls[2][1].body);
+    expect(readMetricValue(findMetric(payload, 'pizza_creation_latency_ms_avg'))).toBeCloseTo(20, 5);
+
+    jest.setSystemTime(new Date('2026-01-01T00:01:11.000Z'));
+    await metrics.reportMetrics();
+    payload = JSON.parse(global.fetch.mock.calls[3][1].body);
+    expect(readMetricValue(findMetric(payload, 'pizza_creation_latency_ms_avg'))).toBe(0);
+
+    metrics.stop();
+  });
 });

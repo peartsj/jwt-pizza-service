@@ -121,11 +121,11 @@ class MetricsService {
 			authFailureTimestamps: [],
 			serviceLatencyMsTotal: 0,
 			serviceLatencyCount: 0,
-			pizzaCreationLatencyMsTotal: 0,
-			pizzaCreationLatencyCount: 0,
+			pizzaCreationEvents: [],
 		};
 
 		this.authWindowMs = 60_000;
+		this.pizzaLatencyWindowMs = 60_000;
 
 		this.activeUsers = new Set();
 		this.reportingTimer = null;
@@ -189,14 +189,15 @@ class MetricsService {
 	}
 
 	pizzaPurchase(success, latencyMs, price = 0, quantity = 0) {
+		const timestampMs = Date.now();
 		const safeLatency = Number.isFinite(Number(latencyMs)) ? Number(latencyMs) : 0;
 		const safePrice = Number.isFinite(Number(price)) ? Number(price) : 0;
 		const safeQuantity = Number.isFinite(Number(quantity)) ? Number(quantity) : 0;
 
 		this.totals.pizzaCreationLatencyMsTotal += safeLatency;
 		this.totals.pizzaCreationLatencyCount += 1;
-		this.window.pizzaCreationLatencyMsTotal += safeLatency;
-		this.window.pizzaCreationLatencyCount += 1;
+		this.window.pizzaCreationEvents.push({ timestampMs, latencyMs: safeLatency });
+		this.#prunePizzaLatencyWindow(timestampMs);
 
 		if (success) {
 			this.totals.pizzasSold += safeQuantity;
@@ -241,8 +242,7 @@ class MetricsService {
 
 		const averageServiceLatency =
 			this.window.serviceLatencyCount > 0 ? this.window.serviceLatencyMsTotal / this.window.serviceLatencyCount : 0;
-		const averagePizzaCreationLatency =
-			this.window.pizzaCreationLatencyCount > 0 ? this.window.pizzaCreationLatencyMsTotal / this.window.pizzaCreationLatencyCount : 0;
+		const averagePizzaCreationLatency = this.#getRecentPizzaLatencyAverage(now);
 
 		const builder = new OtelMetricBuilder(this.source);
 
@@ -384,13 +384,30 @@ class MetricsService {
 		this.#countRecentEvents(this.window.authFailureTimestamps, nowMs);
 	}
 
+	#getRecentPizzaLatencyAverage(nowMs) {
+		this.#prunePizzaLatencyWindow(nowMs);
+
+		const { pizzaCreationEvents } = this.window;
+		if (pizzaCreationEvents.length === 0) {
+			return 0;
+		}
+
+		const totalLatency = pizzaCreationEvents.reduce((sum, event) => sum + event.latencyMs, 0);
+		return totalLatency / pizzaCreationEvents.length;
+	}
+
+	#prunePizzaLatencyWindow(nowMs) {
+		const cutoff = nowMs - this.pizzaLatencyWindowMs;
+		while (this.window.pizzaCreationEvents.length > 0 && this.window.pizzaCreationEvents[0].timestampMs <= cutoff) {
+			this.window.pizzaCreationEvents.shift();
+		}
+	}
+
 	#resetWindowCounters() {
 		this.window.requests = 0;
 		this.window.requestsByMethod = this.#createMethodCounter();
 		this.window.serviceLatencyMsTotal = 0;
 		this.window.serviceLatencyCount = 0;
-		this.window.pizzaCreationLatencyMsTotal = 0;
-		this.window.pizzaCreationLatencyCount = 0;
 	}
 
 	#isTestEnvironment() {
