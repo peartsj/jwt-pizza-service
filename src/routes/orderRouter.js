@@ -4,6 +4,7 @@ const { Role, DB } = require('../database/database.js');
 const { authRouter } = require('./authRouter.js');
 const { asyncHandler, StatusCodeError } = require('../endpointHelper.js');
 const metrics = require('../metrics.js');
+const logger = require('../logging.js');
 
 const orderRouter = express.Router();
 
@@ -86,15 +87,26 @@ orderRouter.post(
       : 0;
 
     const factoryRequestStart = process.hrtime.bigint();
+    const factoryUrl = `${config.factory.url}/api/order`;
+    const factoryRequestBody = { diner: { id: req.user.id, name: req.user.name, email: req.user.email }, order };
 
     try {
-      const r = await fetch(`${config.factory.url}/api/order`, {
+      const r = await fetch(factoryUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', authorization: `Bearer ${config.factory.apiKey}` },
-        body: JSON.stringify({ diner: { id: req.user.id, name: req.user.name, email: req.user.email }, order }),
+        body: JSON.stringify(factoryRequestBody),
       });
       const j = await r.json();
       const latencyMs = Number(process.hrtime.bigint() - factoryRequestStart) / 1_000_000;
+
+      logger.logFactoryRequest({
+        method: 'POST',
+        url: factoryUrl,
+        statusCode: r.status,
+        latencyMs,
+        requestBody: factoryRequestBody,
+        responseBody: j,
+      });
 
       if (r.ok) {
         metrics.pizzaPurchase(true, latencyMs, revenue, pizzaCount);
@@ -106,6 +118,13 @@ orderRouter.post(
     } catch (error) {
       const latencyMs = Number(process.hrtime.bigint() - factoryRequestStart) / 1_000_000;
       metrics.pizzaPurchase(false, latencyMs, 0, 0);
+      logger.logFactoryRequest({
+        method: 'POST',
+        url: factoryUrl,
+        latencyMs,
+        requestBody: factoryRequestBody,
+        responseBody: { message: error.message },
+      });
       throw error;
     }
   })

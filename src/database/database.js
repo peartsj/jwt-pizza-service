@@ -4,6 +4,7 @@ const config = require('../config.js');
 const { StatusCodeError } = require('../endpointHelper.js');
 const { Role } = require('../model/model.js');
 const dbModel = require('./dbModel.js');
+const logger = require('../logging.js');
 class DB {
   constructor() {
     this.initialized = this.initializeDatabase();
@@ -369,10 +370,25 @@ class DB {
       connectTimeout: config.db.connection.connectTimeout,
       decimalNumbers: true,
     });
+    this.instrumentConnectionForLogging(connection);
     if (setUse) {
       await connection.query(`USE ${config.db.connection.database}`);
     }
     return connection;
+  }
+
+  instrumentConnectionForLogging(connection) {
+    const execute = connection.execute.bind(connection);
+    connection.execute = async (sql, params) => {
+      logger.logDatabaseQuery(sql);
+      return execute(sql, params);
+    };
+
+    const query = connection.query.bind(connection);
+    connection.query = async (sql, params) => {
+      logger.logDatabaseQuery(sql);
+      return query(sql, params);
+    };
   }
 
   async initializeDatabase() {
