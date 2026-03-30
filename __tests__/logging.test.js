@@ -86,6 +86,7 @@ describe('logging', () => {
     expect(spy).toHaveBeenCalledTimes(1);
 
     const [, , payload] = spy.mock.calls[0];
+    expect(payload.action).toBe('UPDATE');
     expect(payload.sql).toContain("email='");
     expect(payload.sql).toContain("password='");
     expect(payload.sql).toContain("token='");

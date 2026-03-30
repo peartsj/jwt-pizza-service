@@ -72,7 +72,11 @@ class GrafanaLogger {
   }
 
   logDatabaseQuery(sql) {
-    void this.log('info', 'database_query', { sql: this.#sanitizeSql(sql) });
+    const normalizedSql = String(sql ?? '');
+    void this.log('info', 'database_query', {
+      action: this.#inferSqlAction(normalizedSql),
+      sql: this.#sanitizeSql(normalizedSql),
+    });
   }
 
   logFactoryRequest(details) {
@@ -233,6 +237,27 @@ class GrafanaLogger {
       .replace(/(email\s*=\s*)'[^']*'/gi, `$1'${REDACTED}'`)
       .replace(/(token\s*=\s*)'[^']*'/gi, `$1'${REDACTED}'`)
       .replace(/(authorization\s*=\s*)'[^']*'/gi, `$1'${REDACTED}'`);
+  }
+
+  #inferSqlAction(sql) {
+    const trimmed = String(sql).trim();
+    if (!trimmed) {
+      return 'UNKNOWN';
+    }
+
+    const upper = trimmed.toUpperCase();
+    const actionMatch = upper.match(/^(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|USE|BEGIN|COMMIT|ROLLBACK|WITH)\b/);
+    if (!actionMatch) {
+      return 'UNKNOWN';
+    }
+
+    const action = actionMatch[1];
+    if (action !== 'WITH') {
+      return action;
+    }
+
+    const cteActionMatch = upper.match(/\)\s*(SELECT|INSERT|UPDATE|DELETE)\b/);
+    return cteActionMatch ? cteActionMatch[1] : 'WITH';
   }
 
   #sanitizeString(value) {
