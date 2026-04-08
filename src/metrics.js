@@ -108,6 +108,7 @@ class MetricsService {
 			requestsByMethod: this.#createMethodCounter(),
 			authSuccesses: 0,
 			authFailures: 0,
+			chaosFailures: 0,
 			pizzasSold: 0,
 			pizzaCreationFailures: 0,
 			revenue: 0,
@@ -122,6 +123,7 @@ class MetricsService {
 			requestTimestampsByMethod: this.#createMethodEventBuckets(),
 			authSuccessTimestamps: [],
 			authFailureTimestamps: [],
+			chaosFailureTimestamps: [],
 			pizzaCreationFailureTimestamps: [],
 			pizzaSoldEvents: [],
 			serviceLatencyMsTotal: 0,
@@ -197,6 +199,13 @@ class MetricsService {
 		}
 	}
 
+	chaosFailure() {
+		const timestampMs = Date.now();
+		this.totals.chaosFailures += 1;
+		this.window.chaosFailureTimestamps.push(timestampMs);
+		this.#countRecentEvents(this.window.chaosFailureTimestamps, timestampMs, this.pizzaWindowMs);
+	}
+
 	pizzaPurchase(success, latencyMs, price = 0, quantity = 0) {
 		const timestampMs = Date.now();
 		const safeLatency = Number.isFinite(Number(latencyMs)) ? Number(latencyMs) : 0;
@@ -252,6 +261,7 @@ class MetricsService {
 		const requestsPerMinute = this.#countRecentEvents(this.window.requestTimestamps, now, this.requestWindowMs);
 		const authSuccessPerMinute = this.#countRecentEvents(this.window.authSuccessTimestamps, now);
 		const authFailurePerMinute = this.#countRecentEvents(this.window.authFailureTimestamps, now);
+		const chaosFailuresPerMinute = this.#countRecentEvents(this.window.chaosFailureTimestamps, now, this.pizzaWindowMs);
 		const pizzaCreationFailuresPerMinute = this.#countRecentEvents(this.window.pizzaCreationFailureTimestamps, now, this.pizzaWindowMs);
 		const pizzasSoldPerMinute = this.#sumRecentQuantityEvents(this.window.pizzaSoldEvents, now, this.pizzaWindowMs);
 
@@ -280,6 +290,8 @@ class MetricsService {
 		builder.addGauge('auth_failure_per_minute', authFailurePerMinute);
 		builder.addSum('auth_success_total', this.totals.authSuccesses);
 		builder.addSum('auth_failure_total', this.totals.authFailures);
+		builder.addSum('chaos_failures_total', this.totals.chaosFailures);
+		builder.addGauge('chaos_failures_per_minute', chaosFailuresPerMinute);
 
 		// System metrics.
 		builder.addGauge('cpu_usage_percent', cpuUsage, '%');

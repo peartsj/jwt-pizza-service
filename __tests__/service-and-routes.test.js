@@ -167,6 +167,47 @@ describe('service + routes', () => {
       expect(res.body.dinerId).toBe(7);
     });
 
+    test('PUT /api/order/chaos/:state requires auth', async () => {
+      const app = buildApp();
+      await request(app).put('/api/order/chaos/true').expect(401);
+    });
+
+    test('PUT /api/order/chaos/:state only changes for admin', async () => {
+      const isLoggedIn = jest.fn(async () => true);
+      const app = buildApp({ dbOverrides: { isLoggedIn } });
+      const dinerToken = signToken({ id: 7, name: 'd', email: 'd@jwt.com', roles: [{ role: 'diner' }] });
+      const adminToken = signToken({ id: 1, name: 'a', email: 'a@jwt.com', roles: [{ role: 'admin' }] });
+
+      const dinerRes = await request(app).put('/api/order/chaos/true').set('Authorization', `Bearer ${dinerToken}`).expect(200);
+      expect(dinerRes.body).toEqual({ chaos: false });
+
+      const adminRes = await request(app).put('/api/order/chaos/true').set('Authorization', `Bearer ${adminToken}`).expect(200);
+      expect(adminRes.body).toEqual({ chaos: true });
+    });
+
+    test('POST /api/order can fail with chaos monkey when enabled', async () => {
+      const isLoggedIn = jest.fn(async () => true);
+      const addDinerOrder = jest.fn(async (_user, order) => ({ ...order, id: 123 }));
+      const app = buildApp({ dbOverrides: { isLoggedIn, addDinerOrder } });
+      const adminToken = signToken({ id: 1, name: 'a', email: 'a@jwt.com', roles: [{ role: 'admin' }] });
+      const dinerToken = signToken({ id: 7, name: 'd', email: 'd@jwt.com', roles: [{ role: 'diner' }] });
+
+      await request(app).put('/api/order/chaos/true').set('Authorization', `Bearer ${adminToken}`).expect(200);
+
+      const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.1);
+
+      const res = await request(app)
+        .post('/api/order')
+        .set('Authorization', `Bearer ${dinerToken}`)
+        .send({ franchiseId: 1, storeId: 1, items: [{ menuId: 1, description: 'Veggie', price: 0.05 }] })
+        .expect(500);
+
+      randomSpy.mockRestore();
+
+      expect(res.body.message).toBe('Chaos monkey');
+      expect(addDinerOrder).not.toHaveBeenCalled();
+    });
+
     test('POST /api/order success calls factory and returns jwt', async () => {
       const isLoggedIn = jest.fn(async () => true);
       const addDinerOrder = jest.fn(async (_user, order) => ({ ...order, id: 123 }));
