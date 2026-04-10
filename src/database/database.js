@@ -61,7 +61,8 @@ class DB {
     try {
       const userResult = await this.query(connection, `SELECT * FROM user WHERE email=?`, [email]);
       const user = userResult[0];
-      if (!user || (password && !(await bcrypt.compare(password, user.password)))) {
+      const hasPassword = password !== undefined && password !== null;
+      if (!user || (hasPassword && !(await bcrypt.compare(String(password), user.password)))) {
         throw new StatusCodeError('unknown user', 404);
       }
 
@@ -200,11 +201,19 @@ class DB {
     try {
       const orderResult = await this.query(connection, `INSERT INTO dinerOrder (dinerId, franchiseId, storeId, date) VALUES (?, ?, ?, now())`, [user.id, order.franchiseId, order.storeId]);
       const orderId = orderResult.insertId;
+      const storedItems = [];
       for (const item of order.items) {
         const menuId = await this.getID(connection, 'id', item.menuId, 'menu');
-        await this.query(connection, `INSERT INTO orderItem (orderId, menuId, description, price) VALUES (?, ?, ?, ?)`, [orderId, menuId, item.description, item.price]);
+        const menuRows = await this.query(connection, `SELECT price FROM menu WHERE id=?`, [menuId]);
+        if (menuRows.length === 0) {
+          throw new Error('No price found');
+        }
+
+        const itemPrice = menuRows[0].price;
+        await this.query(connection, `INSERT INTO orderItem (orderId, menuId, description, price) VALUES (?, ?, ?, ?)`, [orderId, menuId, item.description, itemPrice]);
+        storedItems.push({ ...item, menuId, price: itemPrice });
       }
-      return { ...order, id: orderId };
+      return { ...order, items: storedItems, id: orderId };
     } finally {
       connection.end();
     }

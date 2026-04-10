@@ -108,6 +108,15 @@ describe('database DB module', () => {
     await expect(DB.getUser('missing@jwt.com', 'pw')).rejects.toMatchObject({ statusCode: 404 });
   });
 
+  test('getUser rejects blank password when provided', async () => {
+    const bcrypt = require('bcrypt');
+    bcrypt.compare.mockResolvedValueOnce(false);
+    const { DB } = require('../src/database/database.js');
+
+    await expect(DB.getUser('u@jwt.com', '')).rejects.toMatchObject({ statusCode: 404 });
+    expect(bcrypt.compare).toHaveBeenCalledWith('', 'hashed:pw');
+  });
+
   test('updateUser updates fields and returns getUser result', async () => {
     let sawUpdate = false;
     mockNextExecuteBehavior = jest.fn(async (sql) => {
@@ -157,10 +166,14 @@ describe('database DB module', () => {
         return { insertId: 10 };
       }
       if (String(sql).startsWith('INSERT INTO orderItem')) {
+        expect(params[3]).toBe(0.25);
         return { insertId: 11 };
       }
       if (String(sql).startsWith('SELECT id FROM menu')) {
         return [{ id: params[0] }];
+      }
+      if (String(sql).startsWith('SELECT price FROM menu WHERE id=')) {
+        return [{ price: 0.25 }];
       }
       return defaultExecuteBehavior(sql, params);
     });
@@ -170,6 +183,7 @@ describe('database DB module', () => {
       { franchiseId: 1, storeId: 1, items: [{ menuId: 7, description: 'x', price: 1 }] }
     );
     expect(order.id).toBe(10);
+    expect(order.items[0].price).toBe(0.25);
   });
 
   test('createFranchise throws for unknown admin email', async () => {

@@ -57,6 +57,15 @@ describe('service + routes', () => {
       expect(res.body.user.email).toBe('a@jwt.com');
     });
 
+    test('PUT /api/auth validates required fields', async () => {
+      const getUser = jest.fn(async () => ({ id: 1, name: 'a', email: 'a@jwt.com', roles: [{ role: 'admin' }] }));
+      const app = buildApp({ dbOverrides: { getUser } });
+
+      const res = await request(app).put('/api/auth').send({ email: 'a@jwt.com', password: '' }).expect(400);
+      expect(res.body.message).toMatch(/required/);
+      expect(getUser).not.toHaveBeenCalled();
+    });
+
     test('DELETE /api/auth requires auth', async () => {
       const app = buildApp();
       await request(app).delete('/api/auth').expect(401);
@@ -229,6 +238,33 @@ describe('service + routes', () => {
       expect(res.body.order).toEqual(expect.objectContaining({ id: 123 }));
       expect(res.body.jwt).toBe('factory-jwt');
       expect(res.body.followLinkToEndChaos).toBe('http://r');
+    });
+
+    test('POST /api/order sends DB-priced order to factory', async () => {
+      const isLoggedIn = jest.fn(async () => true);
+      const addDinerOrder = jest.fn(async () => ({
+        id: 123,
+        franchiseId: 1,
+        storeId: 1,
+        items: [{ menuId: 1, description: 'Veggie', price: 12.34 }],
+      }));
+      const app = buildApp({ dbOverrides: { isLoggedIn, addDinerOrder } });
+      const token = signToken({ id: 7, name: 'd', email: 'd@jwt.com', roles: [{ role: 'diner' }] });
+
+      global.fetch = jest.fn(async () => ({
+        ok: true,
+        json: async () => ({ reportUrl: 'http://r', jwt: 'factory-jwt' }),
+      }));
+
+      await request(app)
+        .post('/api/order')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ franchiseId: 1, storeId: 1, items: [{ menuId: 1, description: 'Veggie', price: 0.01 }] })
+        .expect(200);
+
+      const [, options] = global.fetch.mock.calls[0];
+      const payload = JSON.parse(options.body);
+      expect(payload.order.items[0].price).toBe(12.34);
     });
 
     test('POST /api/order factory failure returns 500', async () => {

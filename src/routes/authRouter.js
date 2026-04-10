@@ -1,5 +1,6 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const { randomUUID } = require('crypto');
 const config = require('../config.js');
 const { asyncHandler } = require('../endpointHelper.js');
 const { DB, Role } = require('../database/database.js');
@@ -85,7 +86,14 @@ authRouter.put(
   asyncHandler(async (req, res) => {
     try {
       const { email, password } = req.body;
-      const user = await DB.getUser(email, password);
+      const normalizedEmail = typeof email === 'string' ? email.trim() : '';
+      const normalizedPassword = typeof password === 'string' ? password : '';
+      if (!normalizedEmail || !normalizedPassword) {
+        metrics.authenticationAttempt(false, 'login');
+        return res.status(400).json({ message: 'email and password are required' });
+      }
+
+      const user = await DB.getUser(normalizedEmail, normalizedPassword);
       const auth = await setAuth(user);
       metrics.authenticationAttempt(true, 'login');
       metrics.userAuthenticated(user.id);
@@ -109,7 +117,7 @@ authRouter.delete(
 );
 
 async function setAuth(user) {
-  const token = jwt.sign(user, config.jwtSecret);
+  const token = jwt.sign(user, config.jwtSecret, { jwtid: randomUUID() });
   await DB.loginUser(user.id, token);
   return token;
 }
